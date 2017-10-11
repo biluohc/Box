@@ -1,0 +1,702 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="566" onload="init(evt)" viewBox="0 0 1200 566" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="566.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="549" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="1090.00" y="549" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (78 samples, 60.47%)</title><rect x="165.5" y="229" width="713.5" height="15.0" fill="rgb(216,114,42)" rx="2" ry="2" />
+<text text-anchor="" x="168.50" y="239.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="437" width="9.2" height="15.0" fill="rgb(210,167,52)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (1 samples, 0.78%)</title><rect x="1180.9" y="469" width="9.1" height="15.0" fill="rgb(205,213,16)" rx="2" ry="2" />
+<text text-anchor="" x="1183.85" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="1180.9" y="453" width="9.1" height="15.0" fill="rgb(252,220,2)" rx="2" ry="2" />
+<text text-anchor="" x="1183.85" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_map_object (1 samples, 0.78%)</title><rect x="879.0" y="485" width="9.1" height="15.0" fill="rgb(215,135,13)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (24 samples, 18.60%)</title><rect x="961.3" y="421" width="219.6" height="15.0" fill="rgb(244,146,23)" rx="2" ry="2" />
+<text text-anchor="" x="964.32" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (5 samples, 3.88%)</title><rect x="28.3" y="405" width="45.7" height="15.0" fill="rgb(226,58,30)" rx="2" ry="2" />
+<text text-anchor="" x="31.29" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[ke..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (5 samples, 3.88%)</title><rect x="28.3" y="421" width="45.7" height="15.0" fill="rgb(224,120,5)" rx="2" ry="2" />
+<text text-anchor="" x="31.29" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[ke..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ap::main::h1626e1e1919eee4f (88 samples, 68.22%)</title><rect x="74.0" y="437" width="805.0" height="15.0" fill="rgb(207,125,34)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >ap::main::h1626e1e1919eee4f</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (9 samples, 6.98%)</title><rect x="1098.5" y="309" width="82.4" height="15.0" fill="rgb(240,123,41)" rx="2" ry="2" />
+<text text-anchor="" x="1101.53" y="319.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel...</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="357" width="9.2" height="15.0" fill="rgb(221,136,19)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="367.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="915.6" y="437" width="9.1" height="15.0" fill="rgb(218,186,54)" rx="2" ry="2" />
+<text text-anchor="" x="918.58" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (22 samples, 17.05%)</title><rect x="979.6" y="405" width="201.3" height="15.0" fill="rgb(217,89,29)" rx="2" ry="2" />
+<text text-anchor="" x="982.61" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (20 samples, 15.50%)</title><rect x="696.0" y="117" width="183.0" height="15.0" fill="rgb(249,155,22)" rx="2" ry="2" />
+<text text-anchor="" x="699.05" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (21 samples, 16.28%)</title><rect x="988.8" y="357" width="192.1" height="15.0" fill="rgb(217,174,51)" rx="2" ry="2" />
+<text text-anchor="" x="991.76" y="367.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="64.9" y="325" width="9.1" height="15.0" fill="rgb(223,78,15)" rx="2" ry="2" />
+<text text-anchor="" x="67.88" y="335.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (5 samples, 3.88%)</title><rect x="28.3" y="437" width="45.7" height="15.0" fill="rgb(237,145,13)" rx="2" ry="2" />
+<text text-anchor="" x="31.29" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[ke..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="879.0" y="389" width="9.1" height="15.0" fill="rgb(237,54,27)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rust_maybe_catch_panic (88 samples, 68.22%)</title><rect x="74.0" y="453" width="805.0" height="15.0" fill="rgb(216,228,42)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >__rust_maybe_catch_panic</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="325" width="9.2" height="15.0" fill="rgb(241,13,2)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="335.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="357" width="805.0" height="15.0" fill="rgb(215,36,36)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="367.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="341" width="9.2" height="15.0" fill="rgb(217,13,25)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="351.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="405" width="805.0" height="15.0" fill="rgb(248,204,51)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>access (1 samples, 0.78%)</title><rect x="906.4" y="453" width="9.2" height="15.0" fill="rgb(236,95,37)" rx="2" ry="2" />
+<text text-anchor="" x="909.43" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="341" width="805.0" height="15.0" fill="rgb(214,88,8)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="351.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="879.0" y="437" width="9.1" height="15.0" fill="rgb(240,111,44)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (5 samples, 3.88%)</title><rect x="833.3" y="69" width="45.7" height="15.0" fill="rgb(251,225,14)" rx="2" ry="2" />
+<text text-anchor="" x="836.26" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (5 samples, 3.88%)</title><rect x="28.3" y="453" width="45.7" height="15.0" fill="rgb(246,13,3)" rx="2" ry="2" />
+<text text-anchor="" x="31.29" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[ke..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="64.9" y="309" width="9.1" height="15.0" fill="rgb(231,62,39)" rx="2" ry="2" />
+<text text-anchor="" x="67.88" y="319.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (7 samples, 5.43%)</title><rect x="10.0" y="485" width="64.0" height="15.0" fill="rgb(252,170,14)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (37 samples, 28.68%)</title><rect x="540.5" y="149" width="338.5" height="15.0" fill="rgb(247,173,32)" rx="2" ry="2" />
+<text text-anchor="" x="543.54" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_sysdep_start (1 samples, 0.78%)</title><rect x="888.1" y="469" width="9.2" height="15.0" fill="rgb(219,154,9)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (11 samples, 8.53%)</title><rect x="778.4" y="85" width="100.6" height="15.0" fill="rgb(219,44,12)" rx="2" ry="2" />
+<text text-anchor="" x="781.37" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (46 samples, 35.66%)</title><rect x="458.2" y="165" width="420.8" height="15.0" fill="rgb(215,20,53)" rx="2" ry="2" />
+<text text-anchor="" x="461.22" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>mprotect (1 samples, 0.78%)</title><rect x="879.0" y="469" width="9.1" height="15.0" fill="rgb(224,31,54)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="421" width="9.2" height="15.0" fill="rgb(242,146,4)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>dl_main (2 samples, 1.55%)</title><rect x="897.3" y="469" width="18.3" height="15.0" fill="rgb(242,72,41)" rx="2" ry="2" />
+<text text-anchor="" x="900.29" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="421" width="805.0" height="15.0" fill="rgb(248,64,43)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="879.0" y="421" width="9.1" height="15.0" fill="rgb(208,213,48)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="906.4" y="389" width="9.2" height="15.0" fill="rgb(230,113,11)" rx="2" ry="2" />
+<text text-anchor="" x="909.43" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (5 samples, 3.88%)</title><rect x="28.3" y="389" width="45.7" height="15.0" fill="rgb(232,42,5)" rx="2" ry="2" />
+<text text-anchor="" x="31.29" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[ke..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="325" width="805.0" height="15.0" fill="rgb(238,191,11)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="335.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (2 samples, 1.55%)</title><rect x="860.7" y="37" width="18.3" height="15.0" fill="rgb(229,148,13)" rx="2" ry="2" />
+<text text-anchor="" x="863.70" y="47.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (2 samples, 1.55%)</title><rect x="55.7" y="341" width="18.3" height="15.0" fill="rgb(237,113,4)" rx="2" ry="2" />
+<text text-anchor="" x="58.74" y="351.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (3 samples, 2.33%)</title><rect x="851.6" y="53" width="27.4" height="15.0" fill="rgb(230,198,21)" rx="2" ry="2" />
+<text text-anchor="" x="854.55" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (14 samples, 10.85%)</title><rect x="750.9" y="101" width="128.1" height="15.0" fill="rgb(232,6,33)" rx="2" ry="2" />
+<text text-anchor="" x="753.93" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (73 samples, 56.59%)</title><rect x="211.2" y="213" width="667.8" height="15.0" fill="rgb(232,34,23)" rx="2" ry="2" />
+<text text-anchor="" x="214.24" y="223.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (21 samples, 16.28%)</title><rect x="988.8" y="389" width="192.1" height="15.0" fill="rgb(246,43,20)" rx="2" ry="2" />
+<text text-anchor="" x="991.76" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ap (101 samples, 78.29%)</title><rect x="10.0" y="501" width="923.9" height="15.0" fill="rgb(208,80,43)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="511.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >ap</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="906.4" y="405" width="9.2" height="15.0" fill="rgb(207,64,24)" rx="2" ry="2" />
+<text text-anchor="" x="909.43" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (82 samples, 63.57%)</title><rect x="128.9" y="261" width="750.1" height="15.0" fill="rgb(236,82,0)" rx="2" ry="2" />
+<text text-anchor="" x="131.91" y="271.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="879.0" y="405" width="9.1" height="15.0" fill="rgb(225,35,24)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="879.0" y="453" width="9.1" height="15.0" fill="rgb(233,16,49)" rx="2" ry="2" />
+<text text-anchor="" x="881.99" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (129 samples, 100%)</title><rect x="10.0" y="517" width="1180.0" height="15.0" fill="rgb(234,99,52)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="527.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_start_main (88 samples, 68.22%)</title><rect x="74.0" y="485" width="805.0" height="15.0" fill="rgb(225,54,2)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >__libc_start_main</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (81 samples, 62.79%)</title><rect x="138.1" y="245" width="740.9" height="15.0" fill="rgb(210,177,6)" rx="2" ry="2" />
+<text text-anchor="" x="141.06" y="255.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (1 samples, 0.78%)</title><rect x="897.3" y="453" width="9.1" height="15.0" fill="rgb(227,118,39)" rx="2" ry="2" />
+<text text-anchor="" x="900.29" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (25 samples, 19.38%)</title><rect x="952.2" y="453" width="228.7" height="15.0" fill="rgb(248,83,38)" rx="2" ry="2" />
+<text text-anchor="" x="955.17" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_sysdep_start (2 samples, 1.55%)</title><rect x="897.3" y="485" width="18.3" height="15.0" fill="rgb(254,94,15)" rx="2" ry="2" />
+<text text-anchor="" x="900.29" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (25 samples, 19.38%)</title><rect x="952.2" y="437" width="228.7" height="15.0" fill="rgb(251,218,17)" rx="2" ry="2" />
+<text text-anchor="" x="955.17" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (85 samples, 65.89%)</title><rect x="101.5" y="277" width="777.5" height="15.0" fill="rgb(231,144,1)" rx="2" ry="2" />
+<text text-anchor="" x="104.47" y="287.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (68 samples, 52.71%)</title><rect x="257.0" y="197" width="622.0" height="15.0" fill="rgb(245,227,14)" rx="2" ry="2" />
+<text text-anchor="" x="259.98" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (57 samples, 44.19%)</title><rect x="357.6" y="181" width="521.4" height="15.0" fill="rgb(236,175,35)" rx="2" ry="2" />
+<text text-anchor="" x="360.60" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_start (1 samples, 0.78%)</title><rect x="915.6" y="485" width="9.1" height="15.0" fill="rgb(238,31,28)" rx="2" ry="2" />
+<text text-anchor="" x="918.58" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="64.9" y="293" width="9.1" height="15.0" fill="rgb(216,122,46)" rx="2" ry="2" />
+<text text-anchor="" x="67.88" y="303.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_start_user (1 samples, 0.78%)</title><rect x="888.1" y="485" width="9.2" height="15.0" fill="rgb(243,126,18)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="915.6" y="453" width="9.1" height="15.0" fill="rgb(240,195,23)" rx="2" ry="2" />
+<text text-anchor="" x="918.58" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="373" width="9.2" height="15.0" fill="rgb(227,163,0)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="383.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (21 samples, 16.28%)</title><rect x="988.8" y="373" width="192.1" height="15.0" fill="rgb(251,200,43)" rx="2" ry="2" />
+<text text-anchor="" x="991.76" y="383.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="915.6" y="421" width="9.1" height="15.0" fill="rgb(212,83,45)" rx="2" ry="2" />
+<text text-anchor="" x="918.58" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="405" width="9.2" height="15.0" fill="rgb(208,59,47)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>memcmp (1 samples, 0.78%)</title><rect x="924.7" y="485" width="9.2" height="15.0" fill="rgb(219,22,0)" rx="2" ry="2" />
+<text text-anchor="" x="927.73" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="453" width="9.2" height="15.0" fill="rgb(230,53,8)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (3 samples, 2.33%)</title><rect x="46.6" y="357" width="27.4" height="15.0" fill="rgb(229,26,7)" rx="2" ry="2" />
+<text text-anchor="" x="49.59" y="367.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (5 samples, 3.88%)</title><rect x="28.3" y="373" width="45.7" height="15.0" fill="rgb(225,204,1)" rx="2" ry="2" />
+<text text-anchor="" x="31.29" y="383.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[ke..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="373" width="805.0" height="15.0" fill="rgb(222,176,37)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="383.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="888.1" y="389" width="9.2" height="15.0" fill="rgb(229,9,4)" rx="2" ry="2" />
+<text text-anchor="" x="891.14" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (28 samples, 21.71%)</title><rect x="933.9" y="485" width="256.1" height="15.0" fill="rgb(235,201,42)" rx="2" ry="2" />
+<text text-anchor="" x="936.88" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>perf (28 samples, 21.71%)</title><rect x="933.9" y="501" width="256.1" height="15.0" fill="rgb(244,127,29)" rx="2" ry="2" />
+<text text-anchor="" x="936.88" y="511.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >perf</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (27 samples, 20.93%)</title><rect x="933.9" y="469" width="247.0" height="15.0" fill="rgb(205,131,50)" rx="2" ry="2" />
+<text text-anchor="" x="936.88" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>std::rt::lang_start::h2cbdf84df531ec54 (88 samples, 68.22%)</title><rect x="74.0" y="469" width="805.0" height="15.0" fill="rgb(229,172,7)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >std::rt::lang_start::h2cbdf84df531ec54</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="915.6" y="469" width="9.1" height="15.0" fill="rgb(254,87,4)" rx="2" ry="2" />
+<text text-anchor="" x="918.58" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (21 samples, 16.28%)</title><rect x="988.8" y="325" width="192.1" height="15.0" fill="rgb(253,115,32)" rx="2" ry="2" />
+<text text-anchor="" x="991.76" y="335.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (21 samples, 16.28%)</title><rect x="988.8" y="341" width="192.1" height="15.0" fill="rgb(234,193,52)" rx="2" ry="2" />
+<text text-anchor="" x="991.76" y="351.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kernel.kallsyms]]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (7 samples, 5.43%)</title><rect x="10.0" y="469" width="64.0" height="15.0" fill="rgb(212,31,45)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[[kerne..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="906.4" y="437" width="9.2" height="15.0" fill="rgb(224,177,46)" rx="2" ry="2" />
+<text text-anchor="" x="909.43" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="293" width="805.0" height="15.0" fill="rgb(224,189,50)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="303.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (27 samples, 20.93%)</title><rect x="632.0" y="133" width="247.0" height="15.0" fill="rgb(253,86,31)" rx="2" ry="2" />
+<text text-anchor="" x="635.02" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="309" width="805.0" height="15.0" fill="rgb(232,97,38)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="319.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fib (88 samples, 68.22%)</title><rect x="74.0" y="389" width="805.0" height="15.0" fill="rgb(208,152,8)" rx="2" ry="2" />
+<text text-anchor="" x="77.03" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >fib</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[[kernel.kallsyms]] (1 samples, 0.78%)</title><rect x="906.4" y="421" width="9.2" height="15.0" fill="rgb(230,227,13)" rx="2" ry="2" />
+<text text-anchor="" x="909.43" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+</svg>
