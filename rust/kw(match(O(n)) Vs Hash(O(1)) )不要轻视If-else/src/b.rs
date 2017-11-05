@@ -13,6 +13,13 @@ fn vec_parse_kw(kw: &str)-> Option<&'static Kw> {
 }
 
 #[bench]
+fn vec_one_short(b: &mut test::Bencher) {
+    b.iter(|| {
+        [(".",None),].into_iter().for_each(|e|assert_eq!( vec_parse_kw(e.0),e.1))
+    })
+}
+
+#[bench]
 fn vec_well_one(b: &mut test::Bencher) {
     b.iter(|| {
         [("prifix_0_suffix",Some(& Kw::V00)),].into_iter().for_each(|e|assert_eq!( vec_parse_kw(e.0),e.1))
@@ -41,6 +48,12 @@ fn phf_parse_kw(kw: &str)-> Option<&'static Kw> {
     KWS.get(kw).map(|x|*x )
 }
 
+#[bench]
+fn phf_one_none_short(b: &mut test::Bencher) {
+    b.iter(|| {
+        [(".",None),].into_iter().for_each(|e|assert_eq!( phf_parse_kw(e.0),e.1))
+    })
+}
 #[bench]
 fn phf_badly_one(b: &mut test::Bencher) {
     b.iter(|| {
