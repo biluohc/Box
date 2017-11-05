@@ -1,9 +1,9 @@
 [package]
-name = "exprc"
+name = "w"
 version = "0.1.0"
 authors = ["biluohc <biluohc@qq.com>"]
 
-[profile.release]
-debug = true
-
 [dependencies]
+phf = "*"
+phf_macros ="*"
+lazy_static = "^0.2.8"
