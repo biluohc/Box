@@ -18,7 +18,7 @@ sudo perf record -g /home/mxo/.cache/mozilla/cargo/release/ap;
 # 产生的data属于root
 and  sudo chmod 777 *data; 
  # 调用那些生成火焰图
-and perf script  |stackcollapse-perf.pl | flamegraph.pl > flame.svg
+and perf script | stackcollapse-perf.pl | rust-unmangle | flamegraph.pl > flame.svg  
 ```
 ## 每次取样数可能不同, 不够就没有什么信息, 另外可以配合 #[no_mangle] 使用
 */
